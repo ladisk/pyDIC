@@ -6,11 +6,11 @@ A Digital Image Correlation application, developed in Python.
 
 Clone or download the contetnts into a local directory. Run the "main.py" file and follow the on-screen instructions (currently only in Slovenian language). 
 
-To change the default analysis settings, edit the "nastavitve.ini" file.
-
 ```
 python main.py
 ```
+
+To change the default analysis settings, edit the "nastavitve.ini" file.
 
 ### Prerequisities
 
