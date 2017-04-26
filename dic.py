@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-__author__ = 'Domen Gorjup'
+__author__ = 'Domen Gorjup, Janko Slavič, Miha Boltežar'
 
 '''
 Core of the Digital Image Correlation algorithm, implemented for use with the pyDIC application.
@@ -90,6 +90,27 @@ def jacobian_rigid(h, w):
     return jac
 
 
+def jacobian_affine(h, w):
+    '''
+    Returns the Jacobian of a 6-parameter affine wrap function.
+    All elements are structured in the original ROI shape, to allow for simple summation later in the process.
+
+    :param h: Height of the ROI, used for parameter optimization.
+    :param w: Width of the ROI, used for parameter optimization.
+    :return: jac (2x6 numpy array: Jacobian matrix of a 6-parameter affine warp function.
+
+        jac = [[dWx/dp1, dWx/dp2, dWx/dp3, dWx/dp4, dWx/dp5, dWx/dp6],
+               [dWy/dp1, dWy/dp2, dWy/dp3, dWy/dp4, dWy/dp5, dWy/dp6]]
+        (p1=du/dx, p2=du/dy, p3=u, p4=dv/dx, p5=dv/dy, p6=v)
+    '''
+    ones = np.ones((h, w), dtype=np.float64)
+    zeros = np.zeros((h, w), dtype=np.float64)
+    x,y = np.meshgrid(np.arange(w).astype(np.float64), np.arange(h).astype(np.float64))
+    jac = np.array([[x, y, ones, zeros, zeros, zeros],
+                    [zeros, zeros, zeros, x, y, ones]])
+    return jac
+
+
 def sd_images(grad, jac):
     '''
     Calculates the steepest descent images - the product of a given gradient and jacobian.
@@ -143,6 +164,20 @@ def rigid_transform_matrix(p):
     return matrix
 
 
+def affine_transform_matrix(p):
+    '''
+    Given the three transformation parameters, returns the corresponding transformation matrix.
+
+    :param p: Array of three transformation parameters.
+        p = [du/dx, du/dy, u, dv/dx, dv/dy, v]
+    :return: 3x3 matrix of the rigid-body (translations and rotation only) affine warp function.
+    '''
+    matrix = np.array([[1+p[0], p[1], p[2]],
+                      [p[3], 1+p[4], p[5]],
+                      [0, 0, 1]], dtype=np.float64)
+    return matrix
+
+
 def param_from_rt_matrix(matrix):
     '''
     Get array of transformation parameters from the rigid transform warp matrix.
@@ -159,6 +194,22 @@ def param_from_rt_matrix(matrix):
         phi = np.arccos(matrix[0, 0])
     return np.array([vy, ux, phi], dtype=np.float64)
 
+
+def param_from_affine_matrix(matrix):
+    '''
+    Get array of transformation parameters from the affine transform warp matrix.
+
+    :param matrix: Transformation matrix with 6 parameters (du/dx, du/dy, u, dv/dx, dv/dy, v).
+    :return: Array of transformation parameters.
+        p = [du/dx, du/dy, u, dv/dx, dv/dy, v]
+    '''
+    p1 = matrix[0, 0] - 1
+    p2 = matrix[0, 1]
+    p3 = matrix[0, 2]
+    p4 = matrix[1, 0]
+    p5 = matrix[1, 1] - 1
+    p6 = matrix[1, 2]
+    return np.array([p1, p2, p3, p4, p5, p6], dtype=np.float64)
 
 
 def coordinate_warp(matrix, output_shape):

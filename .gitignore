@@ -11,4 +11,5 @@
 ############################
 program/demo/.idea/*
 program/demo/.ipynb_checkpoints/*
+__pycache__/*
 
