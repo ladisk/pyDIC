@@ -23,5 +23,5 @@ To change the default analysis settings, edit the "settings.ini" file.
 ### Authors
 
 - [Domen Gorjup](http://ladisk.si/?what=incfl&flnm=gorjup.php)
-- [Janko Slavič] (http://ladisk.si/?what=incfl&flnm=slavic.php)
-- [Miha Boltežar] (http://ladisk.si/?what=incfl&flnm=boltezar.php)
+- [Janko Slavič](http://ladisk.si/?what=incfl&flnm=slavic.php)
+- [Miha Boltežar](http://ladisk.si/?what=incfl&flnm=boltezar.php)
