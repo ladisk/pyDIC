@@ -1,4 +1,5 @@
 # pyDIC
+[![DOI](https://zenodo.org/badge/64115684.svg)](https://zenodo.org/badge/latestdoi/64115684)
 
 A Digital Image Correlation application, developed in Python.
 
