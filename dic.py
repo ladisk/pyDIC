@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
-__author__ = 'Domen Gorjup, Janko Slavič, Miha Boltežar'
+__author__ = 'Domen Gorjup'
 
 '''
 Core of the Digital Image Correlation algorithm, implemented for use with the pyDIC application.
 '''
 
 import numpy as np
+import scipy.interpolate
 import scipy.ndimage
 import scipy.signal
-import scipy.interpolate
 
 
 def zncc(im1, im2):
@@ -39,7 +39,7 @@ def get_initial_guess(target, roi_image):
 
     corr_fft = scipy.signal.fftconvolve(target, roi_image, mode='valid')
     in_guess_fft = np.unravel_index(corr_fft.argmax(), corr_fft.shape)
-    return np.array(in_guess_fft, dtype=np.float64), corr_fft
+    return np.array(in_guess_fft, dtype=np.int), corr_fft
 
 
 def get_gradient(image, kernel='central_fd', prefilter_gauss=True):
@@ -51,14 +51,15 @@ def get_gradient(image, kernel='central_fd', prefilter_gauss=True):
     :param prefilter_gauss: If True, the gradient kernel is first filtered with a Gauss filter to eliminate noise.
     :return: [gx, gy] (numpy array): Gradient images with respect to x and y direction.
     '''
-
     if kernel == 'central_fd':
         if prefilter_gauss:
-            x_kernel = np.array([[-0.14086616, -0.20863973,  0.,  0.20863973,  0.14086616]])
+            #x_kernel = np.array([[-0.14086616, -0.20863973,  0.,  0.20863973,  0.14086616]])
+            x_kernel = np.array([[-0.44637882,  0.        ,  0.44637882]])
         else:
-            x_kernel = np.array([[1, -8, 0, 8, -1]], dtype=float)/12
+            #x_kernel = np.array([[1, -8, 0, 8, -1]], dtype=float)/12
+            x_kernel = np.array([[-0.5,  0. ,  0.5]])
         y_kernel = np.transpose(x_kernel)
-    elif len(kernel) == 2 and len(kernel[0]) >= 3:
+    elif not isinstance(kernel, str) and len(kernel) == 2 and kernel[0].shape[1] >= 3 and kernel[1].shape[0] >= 3:
         x_kernel = kernel[0]
         y_kernel = kernel[1]
     else:

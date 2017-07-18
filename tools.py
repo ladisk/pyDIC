@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-__author__ = 'Domen Gorjup, Janko Slavič, Miha Boltežar'
+__author__ = 'Domen Gorjup'
 
 '''
 Various tools, used by the pyDIC application.
@@ -23,7 +23,6 @@ warnings.filterwarnings("ignore")
 
 def allfiles(path, filetype='.tif'):
     '''
-    (currently unused!)
     Get all fles of filetype in specified folder.
 
     :param path: path to folder
@@ -74,7 +73,6 @@ def _tiff_to_temporary_file(dir_path):
     :return out_file: Path to output .npy file.
     return cih_file: Path to generated .cih file
     '''
-    print(dir_path)
     dir_path = dir_path.replace('\\', '/')
 
     im_path = glob.glob(dir_path + '/*.tif') + glob.glob(dir_path + '/*.tiff') 
@@ -184,6 +182,74 @@ def get_integer_translation(mraw_path, roi_reference, roi_size, file_shape, init
     return trans, inc
 
 
+def get_simple_translation(mraw_path, roi_reference, roi_size, file_shape, progressBar=None, increment=1, debug=False):
+    '''
+    Get translation data from image, using a Zero Normalized Cross Correlation based Lucas-Kanade algorithm..
+
+    :param mraw_path: Path to .mraw file containing image data.
+    :param roi_reference: Upper left coordinate point of ROI, (y, x).
+    :param roi_size: ROI size, (h, w) [px].
+    :param file_shape: Tuple, (ntotal, height, width) of images in .mraw file.
+    :param increment: Only read every n-th image from sequence.
+    :return: results: Numpy array, containing extracted data, shaped as [y, x, phi] arrays at given images.
+    :return: iters: Array, number of iterations required to reach converegence for each image pair.
+    :param: debug: If True, display debug output.
+    '''
+    with open(mraw_path, 'rb') as mraw:
+        memmap = np.memmap(mraw, dtype=np.uint16, mode='r', shape=file_shape)             # Map to all images in file
+    
+    memmap = memmap[::increment]                            # Apply sequence increment
+    N_inc = len(memmap)
+    errors = {}                                             # Initialize warnings dictionary
+
+    # Precomputable stuff:
+    roi_reference = np.asarray(roi_reference)
+    F = _get_roi_image(memmap[0], roi_reference, roi_size)  # First ROI image, used for the initial guess.
+
+    Fx, Fy = dic.get_gradient(F)
+    Fx2 = np.sum(Fx**2)
+    Fy2 = np.sum(Fy**2)
+    FxFy = np.sum(Fx * Fy)
+    FxF = np.sum(Fx * F)
+    FyF = np.sum(Fy * F)
+
+    mean_F = np.mean(F)
+    Fi = F - mean_F
+    denominator = np.sum(Fi**2)
+
+    results = np.array([[0, 0]], dtype=np.float64)          # Initialize the results array.
+    p_ref = roi_reference                                   # Initialize a reference for all following calculations.
+
+    # Loop through all the images in .mraw file:
+    for i in range(1, len(memmap)):                         # First image was loaded already.
+        d_int = np.round(results[-1])                       # Last calculated integer translation.
+        G = _get_roi_image(memmap[i], p_ref + d_int, roi_size) # Current image at integer location.
+        mean_G = np.mean(G)
+        Gi = G - mean_G
+        
+        # Optimization step:
+        numerator = np.sum(Fi * Gi)
+        a_opt = numerator / denominator
+        b_opt = mean_G - mean_F * a_opt
+
+        Gb = G - b_opt
+        A = np.array([[Fx2, FxFy],
+                      [FxFy, Fx2]]) * a_opt
+        b = np.array([-a_opt*FxF + np.sum(Fx*Gb), 
+                      -a_opt*FyF + np.sum(Fy*Gb)])
+        d = np.linalg.solve(A, b) # dx, dy
+
+        results = np.vstack((results, d_int+d[::-1])) # y, x
+        
+        if progressBar:
+            progressBar.setValue(i / N_inc * 100)  # Update the progress bar.
+        else:
+            stdout_print_progress(i - 2, N_inc)  # Print progress info to stdout.
+
+    memmap._mmap.close()                                    # Close the loaded memmap
+    return results, increment
+
+
 def get_rigid_movement(mraw_path, roi_reference, roi_size, file_shape, progressBar=None, tol=1e-6, maxiter=100, int_order=1, increment=1, crop=False, debug=False):
     '''
     Get rigid body movement (translation and rotation) data from image, using the Newton-Gauss optimization method with
@@ -205,6 +271,7 @@ def get_rigid_movement(mraw_path, roi_reference, roi_size, file_shape, progressB
         memmap = np.memmap(mraw, dtype=np.uint16, mode='r', shape=file_shape)             # Map to all images in file
     
     memmap = memmap[::increment]                            # Apply sequence increment
+    N_inc = len(memmap)
     errors = {}                                             # Initialize warnings dictionary
 
     # Precomputable stuff:
@@ -245,7 +312,7 @@ def get_rigid_movement(mraw_path, roi_reference, roi_size, file_shape, progressB
             G = memmap[i]
 
         h, w = G.shape                                      # Get the shape of the current image for interpolation.
-        spl = RectBivariateSpline(x=np.arange(h),           # Calculate cubic bivariate spline interpolation of G.
+        spl = RectBivariateSpline(x=np.arange(h),           # Calculate the bivariate spline interpolation of G.
                                   y=np.arange(w),
                                   z=G,
                                   kx=int_order,
@@ -286,9 +353,9 @@ def get_rigid_movement(mraw_path, roi_reference, roi_size, file_shape, progressB
         iters = np.append(iters, niter)                         # Append current iteration number to list.
 
         if progressBar:
-            progressBar.setValue(i / file_shape[0] * 100)  # Update the progress bar.
+            progressBar.setValue(i / N_inc * 100)  # Update the progress bar.
         else:
-            stdout_print_progress(i - 2, file_shape[0])  # Print progress info to stdout.
+            stdout_print_progress(i - 2, N_inc)  # Print progress info to stdout.
 
         if debug:   # DEBUG
             if len(errors) != 0:
@@ -328,6 +395,7 @@ def get_affine_deformations(mraw_path, roi_reference, roi_size, file_shape, prog
         memmap = np.memmap(mraw, dtype=np.uint16, mode='r', shape=file_shape)             # Map to all images in file
 
     memmap = memmap[::increment]                            # Apply sequence increment
+    N_inc = len(memmap)
     errors = {}                                             # Initialize warnings dictionary
 
     # Precomputable stuff:
@@ -412,9 +480,9 @@ def get_affine_deformations(mraw_path, roi_reference, roi_size, file_shape, prog
         iters = np.append(iters, niter)                         # Append current iteration number to list.
 
         if progressBar:
-            progressBar.setValue(i / file_shape[0] * 100)  # Update the progress bar.
+            progressBar.setValue(i / N_inc * 100)  # Update the progress bar.
         else:
-            stdout_print_progress(i-2, file_shape[0])      # Print progress info to stdout.
+            stdout_print_progress(i-2, N_inc)      # Print progress info to stdout.
         
         if debug:   # DEBUG
             if len(errors) != 0:
@@ -457,7 +525,9 @@ def _get_roi_image(target, roi_reference, roi_size):
     :param roi_size: ROI size, (h, w) [px].
     :return: ROI image (2D numpy array).
     '''
-    ul = roi_reference   # Upper left vertex of ROI
+    ul = np.array(roi_reference).astype(int)   # Upper left vertex of ROI
+    m, n = target.shape
+    ul = np.clip(np.array(ul), 0, [m-roi_size[0]-1, n-roi_size[1]-1])
     roi_image = target[ul[0]:ul[0]+roi_size[0], ul[1]:ul[1]+roi_size[1]]
     return roi_image
 
@@ -471,8 +541,8 @@ def _crop_with_border_slice(reference, size,  border=10):
     :param border: Border size.
     :return: crop_slice: tuple of (size[0]+border[0], size[1]+border[1]) to use for slicing.
     '''
-    y, x = reference
-    m, n = size
+    y, x = np.array(reference).astype(int)
+    m, n = np.array(size).astype(int)
     by, bx = border, border
     yslice = slice(y - by, y + m + by)
     xslice = slice(x - bx, x + n + bx)
@@ -534,6 +604,7 @@ def plot_data(data, unit):
     '''
 
     zp_factor = 10
+    lw = 1
     highpass = False
     latex = False
 
@@ -573,8 +644,8 @@ def plot_data(data, unit):
         ty = data[:, 1]
         tx = data[:, 2]
         plt.figure()
-        plt.plot(t, ty, label=r'$y$')
-        plt.plot(t, tx, label=r'$x$')
+        plt.plot(t, ty-ty[0], label=r'$y$', lw=lw)
+        plt.plot(t, tx-tx[0], label=r'$x$', lw=lw)
         plt.legend()
         plt.grid()
         plt.show()
@@ -583,22 +654,22 @@ def plot_data(data, unit):
         ty = data[:, 1]
         tx = data[:, 2]
         phi = data[:, 3]
-        f, ax = plt.subplots(3, 1)
-        ax[0].plot(t, ty-np.mean(ty), label=r'$y$')
-        ax[0].plot(t, tx-np.mean(tx), label=r'$x$')
+        f, ax = plt.subplots(2, 1)
+        ax[0].plot(t, ty-ty[0], label=r'$y$', lw=lw)
+        ax[0].plot(t, tx-tx[0], label=r'$x$', lw=lw)
         ax[0].set_ylabel(r'$x, y$ [{:s}]'.format(unit))
         ax[0].set_xlabel(r'$t$ [s]')
         ax[0].legend()
         ax[0].grid()
-        ax[1].plot(t, phi-np.mean(phi), label=r'$\alpha$')
+        ax[1].plot(t, phi-phi[0], label=r'$\alpha$', lw=lw)
         ax[1].grid()
         ax[1].set_ylabel(r'$\alpha$ [rad]')
         ax[1].set_xlabel(r'$t$ [s]')
-        ax[2].plot(np.fft.rfftfreq(zp_factor*n, t[1]-t[0]), np.real(np.fft.rfft(ty-np.mean(ty), zp_factor*n))/n*2)
-        ax[2].grid()
-        ax[2].set_xlabel(r'$f$ [Hz]')
-        ax[2].set_ylabel(r'$Re(c_n)$ [/]')
-        ax[2].set_xlim([0, 200])
+        # ax[2].plot(np.fft.rfftfreq(zp_factor*n, t[1]-t[0]), np.real(np.fft.rfft(ty-np.mean(ty), zp_factor*n))/n*2, lw=lw)
+        # ax[2].grid()
+        # ax[2].set_xlabel(r'$f$ [Hz]')
+        # ax[2].set_ylabel(r'$Re(c_n)$ [/]')
+        # ax[2].set_xlim([0, 200])
         plt.tight_layout()
         plt.show()
 
@@ -619,17 +690,17 @@ def plot_data(data, unit):
 
         f, ax = plt.subplots(3, 1)
 
-        ax[0].plot(t, u - np.mean(u), label=r'$u$')
-        ax[0].plot(t, v - np.mean(v), label=r'$v$')
+        ax[0].plot(t, u - np.mean(u), label=r'$u$', lw=lw)
+        ax[0].plot(t, v - np.mean(v), label=r'$v$', lw=lw)
         ax[0].set_ylabel(r'$x, y$ [{:s}]'.format(unit))
         ax[0].set_xlabel(r'$t$ [s]')
         ax[0].legend()
         ax[0].grid()
 
-        ax[1].plot(t, u_x-np.mean(u_x), label=r'$du/dx$')
-        ax[1].plot(t, u_y-np.mean(u_y), label=r'$du/dy$')
-        ax[1].plot(t, v_x-np.mean(v_x), label=r'$dv/dx$')
-        ax[1].plot(t, v_y-np.mean(v_y), label=r'$dv/dy$')
+        ax[1].plot(t, u_x-np.mean(u_x), label=r'$du/dx$', lw=lw)
+        ax[1].plot(t, u_y-np.mean(u_y), label=r'$du/dy$', lw=lw)
+        ax[1].plot(t, v_x-np.mean(v_x), label=r'$dv/dx$', lw=lw)
+        ax[1].plot(t, v_y-np.mean(v_y), label=r'$dv/dy$', lw=lw)
         ax[1].set_xlabel(r'$t$ [s]')
         ax[1].legend(loc=(0,1.01), ncol=4)
         ax[1].grid()
@@ -643,7 +714,7 @@ def plot_data(data, unit):
         # ax[2].legend()
 
         for k, v in collections.OrderedDict(((r'$du/dx$', u_x), (r'$du/dy$', u_y), (r'$dv/dx$', v_x), (r'$dv/dy$', v_y))).items():
-            ax[2].plot(np.fft.rfftfreq(zp_factor*n, t[1]-t[0]), 2/n*np.real(np.fft.rfft(v-np.mean(v), zp_factor*n)), label=k)
+            ax[2].plot(np.fft.rfftfreq(zp_factor*n, t[1]-t[0]), 2/n*np.real(np.fft.rfft(v-np.mean(v), zp_factor*n)), label=k, lw=lw)
         ax[2].grid()
         ax[2].set_xlabel(r'$f$ [Hz]')
         ax[2].set_ylabel(r'$Re(c_n)$ [/]')

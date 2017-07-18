@@ -12,7 +12,7 @@ import csv
 import glob
 import pickle
 import datetime
-from PyQt4 import QtCore, QtGui
+from PyQt5 import QtCore, QtGui
 import pyqtgraph as pg
 import tools
 import numpy as np
@@ -37,20 +37,26 @@ class GlavnoOkno(QtGui.QWidget):
 
         # Other parameterss
         self.dir_path = os.path.dirname(os.path.abspath(__file__))
-        self.results_file_name = 'DIC_analysis_'
+        self.save_path = self.dir_path
+        self.results_file_name = 'DIC_analysis'
         self.mode = 'rigid'     # The default analysis mode.
-        self.all_modes = ['rigid', 'deformations', 'integer']
-        self.all_mode_names = ['Rigid', 'Deformable', 'Integer translation']
+        self.all_modes = ['rigid', 'deformations', 'translation', 'integer']
+        self.all_mode_names = ['Rigid', 'Deformable', 'Simple translation', 'Integer translation']
         self.mode_descriptions = {'rigid': 'Rigid body displacement (translation, rotation).',
                                   'deformations': 'Translation and deformation.',
+                                  'translation': '(EXPERIMENTAL) Translations, calculated in single Lucas-Kanade iteration. '\
+                                                'Does not work well for translations > 1 px.',
                                   'integer': 'Integer translation - displacements of 1 px and above only!'}
 
-        #Layout Elements:
+        # Layout Elements:
         self.grid = QtGui.QGridLayout()
         self.grid.setSpacing(5)
         BottomFrame = QtGui.QGroupBox()
-        infoFrame = QtGui.QGroupBox()
         infobox = QtGui.QVBoxLayout()
+        settingsbox = QtGui.QVBoxLayout()
+        settingsFrame = QtGui.QGroupBox()
+        saveFrame = QtGui.QGroupBox()
+        savebox = QtGui.QVBoxLayout()
         calibFrame = QtGui.QGroupBox()
         calibbox = QtGui.QHBoxLayout()
         imageFrame = QtGui.QGroupBox()
@@ -73,16 +79,24 @@ class GlavnoOkno(QtGui.QWidget):
 
         self.pathlabel = QtGui.QLabel()
         self.pathlabel.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
-        self.pathlabel.setMaximumSize(infoFrame.frameGeometry().width(), 200)
         self.pathlabel.setSizePolicy(QtGui.QSizePolicy.Expanding, QtGui.QSizePolicy.Expanding)
         self.pathlabel.setWordWrap(True)
         self.pathlabel.setTextFormat(1)
         self.info = QtGui.QLabel()
         self.info.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
-        self.info.setMaximumSize(infoFrame.frameGeometry().width(), 1000)
         self.info.setSizePolicy(QtGui.QSizePolicy.Expanding, QtGui.QSizePolicy.Expanding)
         self.info.setWordWrap(True)
         self.info.setTextFormat(1)
+
+        self.savepathButton =  QtGui.QPushButton('Change', self)
+        self.savepathButton.clicked.connect(self.select_save_path)
+        self.savepathButton.setToolTip('Change the folder to save analysis results to.')
+        self.savepathLineEdit = QtGui.QLineEdit('')
+        self.savepathLineEdit.editingFinished.connect(self.update_save_path)
+        self.savenameLineEdit = QtGui.QLineEdit(self.results_file_name)
+        self.savenameLineEdit.editingFinished.connect(self.update_save_name)
+        self.timestampCheckbox = QtGui.QCheckBox('Timestamp')
+        self.timestampCheckbox.setChecked(True)
 
         self.calibButton = QtGui.QPushButton('Calibrate', self)
         self.calibButton.clicked.connect(self.calibrate)
@@ -95,27 +109,16 @@ class GlavnoOkno(QtGui.QWidget):
         self.caliblabel = QtGui.QLabel()
         self.caliblabel.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
 
-        # Info section layout
-        infobox.addWidget(self.pathlabel)
-        infobox.addWidget(self.info)
-        infobox.addStretch(1)
-        infoFrame.setLayout(infobox)
-        infoFrame.setTitle('Info:')
-        infoFrame.setToolTip('Basic image sequence info, from the .cih file.')
-
-        # Calibration tools section layout
-        calibbox.addWidget(self.calibButton)
-        calibbox.addWidget(self.resetbButton)
-        calibbox.addWidget(self.caliblabel)
-        calibbox.addStretch(1)
-        calibFrame.setLayout(calibbox)
-        calibFrame.setTitle("Unit calibration:")
+        s_policy = QtGui.QSizePolicy(QtGui.QSizePolicy.Expanding, QtGui.QSizePolicy.Expanding)
+        s_policy.setVerticalStretch(8)
+        settingsFrame.setSizePolicy(s_policy)
 
         # Customized ImageView GUI for sequence preview:
         self.imw = pg.ImageView()
         self.imw.ui.roiBtn.hide()
         self.imw.ui.menuBtn.hide()
         self.imw.roi.sigRegionChanged.disconnect(self.imw.roiChanged)   # disconnect original ROI
+        self.roi_set = False # ROI not yet properly configured
 
         # Image view control, ROI info
         self.autoscaleButton = QtGui.QPushButton('Center')
@@ -131,7 +134,86 @@ class GlavnoOkno(QtGui.QWidget):
         imagebox.addLayout(imctrlHbox)
         imageFrame.setLayout(imagebox)
 
-        # DIC controls and settings:
+        # Info / Settings section layout
+        infobox.addWidget(self.pathlabel)
+        infobox.addWidget(self.info)
+        infobox.addStretch(1)
+
+        def add_combo(form, label, attribute, options_range=(0, 2, 1), log=False, boolean=False, options_list=None):
+            combo = QtGui.QComboBox()
+            if options_list is None:
+                if boolean:
+                    options_list = ['True', 'False']
+                elif log:
+                    options_list = ['1e-{:0>2d}'.format(np.abs(i)) for i in np.arange(*options_range)]
+                else:
+                    options_list = [str(i) for i in np.arange(*options_range)]
+                
+                if str(attribute) not in options_list:
+                    options_list = [str(attribute)] + options_list
+            combo.addItems(options_list)
+            
+            combo.setCurrentIndex(options_list.index(str(attribute)))
+            combo.currentIndexChanged.connect(self.update_settings)
+            form.addRow(label, combo)
+            return combo
+
+        def add_tupple_line_edit(form, label, value=''):
+            if isinstance(value, tuple) and len(value) == 2:
+                value = '{:.0f}, {:.0f}'.format(*value)
+            lineEdit = QtGui.QLineEdit(value)
+            lineEdit.editingFinished.connect(self.update_settings)
+            form.addRow(label, lineEdit)
+            return lineEdit
+
+        # Settings Form layout
+        self.load_settings(configfile=(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'settings.ini')))
+        
+        settingsForm = QtGui.QFormLayout()
+        #settingsForm.addRow(QtGui.QLabel('<b>Analysis Settings:<\b>'))
+        self.conv_tol_combo = add_combo(settingsForm, 'Convergence tolerance', self.conv_tol, (-5, -14, -1), log=True)
+        self.max_iter_combo = add_combo(settingsForm, 'Maximum iterations', self.max_iter, (10, 101, 10))
+        self.int_order_combo = add_combo(settingsForm, 'Interpolation spline order', self.int_order, (1, 6, 1))
+        self.crop_px_combo = add_combo(settingsForm, 'Crop border width', self.crop_px, (0, 10, 3))
+        self.sequence_increment_combo = add_combo(settingsForm, 'Sequence increment', self.sequence_increment, options_list=['1', '10', '20', '50', '100'])
+        settingsForm.addRow(QtGui.QLabel('<hr>'))
+        self.roi_size_edit = add_tupple_line_edit(settingsForm, 'ROI size (y, x)', self.initial_roi_size)
+        self.roi_position_edit = add_tupple_line_edit(settingsForm, 'ROI center (y, x)')
+
+        settingsForm.addRow(QtGui.QLabel('<hr>'))
+        self.debug_combo = add_combo(settingsForm, 'Debug', self.debug, boolean=True)
+
+        settingsFrame.setLayout(settingsForm)
+        settingsbox.addWidget(settingsFrame)
+        settingsbox.addWidget(saveFrame)
+        settingsbox.addWidget(calibFrame)
+
+        # Save path selection section layout
+        savepath_box = QtGui.QHBoxLayout()
+        savepath_box.addWidget(QtGui.QLabel('Save to:   '))
+        savepath_box.addWidget(self.savepathLineEdit)
+        savepath_box.addWidget(self.savepathButton)
+        savepath_box.addStretch(1)
+        savename_box = QtGui.QHBoxLayout()
+        savename_box.addWidget(QtGui.QLabel('File name:'))
+        savename_box.addWidget(self.savenameLineEdit)
+        savename_box.addWidget(self.timestampCheckbox)
+        savename_box.addStretch(1)
+        savebox.addLayout(savepath_box)
+        savebox.addLayout(savename_box)
+        savebox.addStretch(1)
+        saveFrame.setLayout(savebox)
+        saveFrame.setTitle("Output:")
+
+        # Calibration tools section layout
+        calibbox.addWidget(self.calibButton)
+        calibbox.addWidget(self.resetbButton)
+        calibbox.addWidget(self.caliblabel)
+        calibbox.addStretch(1)
+        calibFrame.setLayout(calibbox)
+        calibFrame.setTitle("Unit calibration:")
+
+        # DIC controls:
         mode_label = QtGui.QLabel('Mode:')
         self.mode_selection = QtGui.QComboBox(self)
         self.mode_selection.setEnabled(False)
@@ -170,8 +252,13 @@ class GlavnoOkno(QtGui.QWidget):
         self.grid.addWidget(self.openFolder, 0, 0, 1, 2)
         self.grid.addWidget(self.nazajButton, 1,0,1,1)
         self.grid.addWidget(self.naprejButton, 1,1,1,1)
-        self.grid.addWidget(infoFrame, 2, 0, 8, 2)
-        self.grid.addWidget(calibFrame, 9, 0, 1, 2)
+        
+        
+        #self.grid.addWidget(infoFrame, 2, 0, 8, 2)
+        is_tabs = SettingsInfoTabWidget(self, info_layout=infobox, settings_layout=settingsbox)
+        self.grid.addWidget(is_tabs, 2, 0, 8, 2)
+        
+        #self.grid.addWidget(calibFrame, 9, 0, 1, 2)
         self.grid.addWidget(imageFrame, 0, 2, 10, 6)
         self.grid.addWidget(BottomFrame, 11, 0, 1,8)
 
@@ -186,12 +273,15 @@ class GlavnoOkno(QtGui.QWidget):
         '''
         Opens the selected folder and checks for image data. If found, displays a preview.
         '''
-        self.load_settings(configfile=(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'settings.ini')))
+        #self.load_settings(configfile=(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'settings.ini')))
+        self.update_settings() # Use user-defined settings instead of default ones
         self.naprejButton.setEnabled(False)
         self.imw.setImage(np.zeros((100,100)))
-        selected_path = QtGui.QFileDialog.getOpenFileName(self, 'Select path to .cih or .tif file.', self.dir_path, filter=("cih (*.cih);; tiff (*.tif)"))
+        selected_path = QtGui.QFileDialog.getOpenFileName(self, 'Select path to .cih or .tif file.', self.dir_path, filter=("cih (*.cih);; tiff (*.tif)"))[0]
         self.dir_path = os.path.dirname(selected_path)
         self.save_path = self.dir_path + '/DIC_results/'
+        self.savepathLineEdit.setText(self.save_path)
+        #self.update_save_path()
         file_extension = selected_path.split('.')[-1].lower()
 
         def _process_tif_images(dir_path):
@@ -265,11 +355,29 @@ class GlavnoOkno(QtGui.QWidget):
         infolabel = ''
         for key, value in self.info_dict.items():
             infolabel += '<b>{}</b> : {}<br>'.format(key, value.replace('\n', '<br>'))
+
+        # Arrows:
+        self.ax = pg.ArrowItem(angle=180, tipaAngle=15, headLen=17, brush='r', pen=None, pos=(self.w, 0))
+        self.ay = pg.ArrowItem(angle=-90, tipaAngle=15, headLen=17, brush='r', pen=None, pos=(0, self.h))
+        font = QtGui.QFont()
+        font.setPointSize(13)
+        font.setFamily('courier')
+        self.xlabel=pg.TextItem(text='x', color='r',  anchor=(1,1))
+        self.xlabel.setPos(self.w+5, 0)
+        self.xlabel.setFont(font)
+        self.ylabel=pg.TextItem(text='y', color='r',  anchor=(1, 1))
+        self.ylabel.setPos(0, self.h)
+        self.ylabel.setFont(font)
+
         # Get a preview image sequence (t, W, H)!:
         data = tools.get_sequence(filepath, file_shape=(self.N_images, self.h, self.w), nmax=nmax).transpose(0,2,1) 
         self.pathlabel.setText(pathtext)
         self.info.setText(infolabel)
         self.imw.setImage(data)
+        self.imw.addItem(self.ax)
+        self.imw.addItem(self.xlabel)
+        self.imw.addItem(self.ylabel)
+        self.imw.addItem(self.ay)
         self.naprejButton.setEnabled(True)
         self.autoscaleButton.setEnabled(True)
 
@@ -307,6 +415,7 @@ class GlavnoOkno(QtGui.QWidget):
         self.imw.roi.addScaleHandle(pos=(1, 1), center=(0.5, 0.5))
         self.imw.roi.setPen(pg.mkPen(color=pg.mkColor('00FF6F'), width=2))
         self.imw.CHroi.setPen(pg.mkPen(color=pg.mkColor('FF0000'), width=2))
+        self.roi_set = True
 
 
     def load_settings(self, configfile='settings.ini'):
@@ -327,6 +436,64 @@ class GlavnoOkno(QtGui.QWidget):
         self.debug = bool(Config.get('DIC', 'debug'))
 
 
+    def update_settings(self):
+        '''
+        Update settings to user-set values.
+        '''
+        self.conv_tol = float(self.conv_tol_combo.currentText())
+        self.max_iter = int(self.max_iter_combo.currentText())
+        self.int_order = int(self.int_order_combo.currentText())
+        self.crop_px = int(self.crop_px_combo.currentText())
+        self.sequence_increment = int(self.sequence_increment_combo.currentText())
+        bool_string_key = {'True':True, 'False':False}
+        self.debug = bool_string_key[self.debug_combo.currentText()]
+        
+        # set ROI position, size if image already loaded:
+        if self.roi_set:
+            try:
+                h_, w_ = [int(num)//2*2+1 for num in self.roi_size_edit.text().replace(',', ' ').split()]
+                h_ = np.clip(h_, self.min_roi_size[0], self.h-1)
+                w_ = np.clip(w_, self.min_roi_size[1], self.w-1)
+                cy_, cx_ = [int(num) for num in self.roi_position_edit.text().replace(',', ' ').split()]
+                cy_ = np.clip(cy_, h_//2, self.h-h_//2-1)
+                cx_ = np.clip(cx_, w_//2, self.w-w_//2-1)
+                self.imw.roi.setSize((w_, h_), finish=False)
+                self.imw.roi.setPos(cx_-w_//2, cy_-h_//2)
+                self.imw.CHroi.setPos(cx_, cy_)
+            except Exception as e:
+                print(e)
+
+
+    def update_save_path(self):
+        '''
+        Update the save_path attribue to user-selected value.
+        '''
+        selected_path = self.savepathLineEdit.text()
+        if os.path.isdir(selected_path):
+            self.save_path = selected_path
+            self.savepathLineEdit.setToolTip(selected_path)
+        else:
+            self.savepathLineEdit.setText('Invalid path! Make sure the folder exists.')
+
+
+    def select_save_path(self):
+        '''
+        Display file dialog and update the save path.
+        '''
+        selected_path = QtGui.QFileDialog.getExistingDirectory(self, 'Select a directory to save analysis results to.', self.dir_path)
+        if os.path.isdir(selected_path):
+            self.savepathLineEdit.setText(selected_path)
+            self.update_save_path()
+
+
+    def update_save_name(self):
+        '''
+        Update the save file name attribute.
+        '''
+        self.results_file_name = self.savenameLineEdit.text()
+        self.savenameLineEdit.setToolTip(self.savenameLineEdit.text())
+
+
     def to_beginning(self):
         '''
         Returns to initial screen, displaying currently set image sequence.
@@ -342,10 +509,15 @@ class GlavnoOkno(QtGui.QWidget):
         self.imw.ui.histogram.show()
         self.imw.roi.sigRegionChanged.disconnect(self.imw.roiChanged)
         self.imw.CHroi.hide()
+        self.ax.hide()
+        self.xlabel.hide()
+        self.ay.hide()
+        self.ylabel.hide()
         self.roiLabel.setText('')
         self.default_calibration()
         self.progressBar.hide()
         self.progressBar.reset()
+        self.roi_set = False
 
 
     def update_roi_position(self):
@@ -373,6 +545,8 @@ class GlavnoOkno(QtGui.QWidget):
         self.imw.CHroi.setPos(self.roi_center[::-1])
         roi_info = 'ROI (y,x):\tcenter: {:}\t size: {:}\t[px]'.format(self.roi_center, self.roi_size)
         self.roiLabel.setText(roi_info)
+        self.roi_position_edit.setText('{:.0f}, {:.0f}'.format(*self.roi_center))
+        self.roi_size_edit.setText('{:.0f}, {:.0f}'.format(*self.roi_size))
 
     
     def moving_roi(self):
@@ -447,15 +621,40 @@ class GlavnoOkno(QtGui.QWidget):
                                                    progressBar=self.progressBar,
                                                    n_im=10)
             inc = result[-1]  # Image sequence selection increment.
+            n_iters = [1]
+            errors = dict()
             # Unit calibration:
             if self.mm_px != 1:
                 result[0][:, 0] = result[0][:, 0] * self.mm_px
                 result[0][:, 1] = result[0][:, 1] * self.mm_px
 
+
+        elif self.mode == 'translation':
+            if self.debug:
+                print('Model: SIMPLE TRANSLATION')
+            #try:
+            result = tools.get_simple_translation(self.mraw_path,
+                                                    self.roi_reference,
+                                                    self.roi_size,
+                                                    (self.N_images, self.h, self.w),
+                                                    progressBar=self.progressBar,
+                                                    increment=self.sequence_increment)
+            #except:
+                #print('An error occurred. Try using a different method.')
+            
+            inc = result[-1]
+            n_iters = [1]
+            errors = dict()
+            # Unit calibration:
+            if self.mm_px != 1:
+                result[0][:, 0] = result[0][:, 0] * self.mm_px
+                result[0][:, 1] = result[0][:, 1] * self.mm_px
+
+
         elif self.mode == 'rigid':
             if self.debug: 
                 print('Model: RIGID')
-                print('Interpolating cropped ROI ({:d} px border).'.format(self.crop_px))
+                print('Interpolating (cropped?) ROI ({:d} px border).'.format(self.crop_px))
             try:
                 result = tools.get_rigid_movement(self.mraw_path,
                                                   self.roi_reference,
@@ -493,7 +692,7 @@ class GlavnoOkno(QtGui.QWidget):
         elif self.mode == 'deformations':
             if self.debug: 
                 print('Model: DEFORMABLE')
-                print('Interpolating cropped ROI ({:d} px border).'.format(self.crop_px))
+                print('Interpolating (cropped?) ROI ({:d} px border).'.format(self.crop_px))
             try:
                 result = tools.get_affine_deformations(self.mraw_path,
                                                        self.roi_reference,
@@ -529,6 +728,10 @@ class GlavnoOkno(QtGui.QWidget):
         
         # Hide ROI center marker
         self.imw.CHroi.hide()
+        self.ax.hide()
+        self.xlabel.hide()
+        self.ay.hide()
+        self.ylabel.hide()
 
         # If maximum number of iterations was reached:
         if n_iters[-1] == 0:
@@ -577,8 +780,13 @@ class GlavnoOkno(QtGui.QWidget):
         # Save the results:
         tkin_data = np.hstack((self.t, self.kin))
         timestamp = datetime.datetime.now().strftime('%d-%m-%H-%M-%S')
-        self.save_csv(data=tkin_data, stamp=timestamp)
-        self.pickledump(data=tkin_data, stamp=timestamp)
+        print(self.timestampCheckbox.checkState())
+        if self.timestampCheckbox.checkState():
+            stamp = timestamp
+        else:
+            stamp = ''
+        self.save_csv(data=tkin_data, stamp=stamp)
+        self.pickledump(data=tkin_data, stamp=stamp)
 
         # Show black image - to close loaded memmap:
         self.imw.setImage(np.zeros((100,100)))
@@ -642,7 +850,12 @@ class GlavnoOkno(QtGui.QWidget):
         :return:
         '''
         os.makedirs(self.save_path, exist_ok=True)  # If the directory does not exist, create it.
-        with open(self.save_path + self.results_file_name + stamp + '.csv', 'w', newline='') as csvfile:
+        if stamp:
+            filename = '_'.join((self.results_file_name, stamp))
+        else: 
+            filename = self.results_file_name
+        csv_file = os.path.join(self.save_path, filename + '.csv')
+        with open(csv_file, 'w', newline='') as csvfile:
             if len(data[0]) == 3:
                 fieldnames = ['t', 'v', 'u']
             elif len(data[0]) == 4:
@@ -667,6 +880,11 @@ class GlavnoOkno(QtGui.QWidget):
         :return:
         '''
         os.makedirs(self.save_path, exist_ok=True)  # If the directory does not exist, create it.
+        if stamp:
+            filename = '_'.join((self.results_file_name, stamp))
+        else: 
+            filename = self.results_file_name
+        pkl_file = os.path.join(self.save_path, filename + '.pkl')
         if len(data[0]) == 3:
             dict_keys = ['t', 'v', 'u']
         elif len(data[0]) == 4:
@@ -677,7 +895,37 @@ class GlavnoOkno(QtGui.QWidget):
             raise ValueError('Unrecognized result format.')
 
         dict_data = dict(zip(dict_keys, [data[:, _] for _ in range(len(data[0]))]))
-        pickle.dump(dict_data, open(self.save_path + self.results_file_name + stamp + '.pkl', 'wb'))
+        pickle.dump(dict_data, open(pkl_file, 'wb'))
+
+
+class SettingsInfoTabWidget(QtGui.QTabWidget):
+    """
+    A widget containing the tab structure of analysis settings and selected sequence info.
+    """
+    def __init__(self, parent, info_layout=None, settings_layout=None):
+        super().__init__(parent)
+        self.iTab = QtGui.QWidget()
+        self.sTab = QtGui.QWidget()
+        self.addTab(self.iTab, 'Info')
+        self.addTab(self.sTab, 'Settings')
+        self.iTabUI(info_layout)
+        self.sTabUI(settings_layout)
+
+    def iTabUI(self, info_layout):
+        if info_layout is not None:
+            self.iTab.setLayout(info_layout)
+        else:
+            layout = QtGui.QVBoxLayout()
+            layout.addWidget(QtGui.QLabel('Info layout not properly set!'))
+            self.iTab.setLayout(layout)
+    
+    def sTabUI(self, settings_layout):
+        if settings_layout is not None:
+            self.sTab.setLayout(settings_layout)
+        else:
+            layout = QtGui.QVBoxLayout()
+            layout.addWidget(QtGui.QLabel('Settings layout not properly set!'))
+            self.sTab.setLayout(layout)
 
 
 class DotROI(pg.ROI):
