@@ -41,7 +41,8 @@ class GlavnoOkno(QtGui.QWidget):
         self.results_file_name = 'DIC_analysis'
         self.mode = 'rigid'     # The default analysis mode.
         self.all_modes = ['rigid', 'deformations', 'translation', 'integer']
-        self.all_mode_names = ['Rigid', 'Deformable', 'Simple translation', 'Integer translation']
+        #self.all_mode_names = ['Rigid', 'Deformable', 'Simple translation', 'Integer translation'] # simple translation mode needs debugging
+        self.all_mode_names = ['Rigid', 'Deformable']
         self.mode_descriptions = {'rigid': 'Rigid body displacement (translation, rotation).',
                                   'deformations': 'Translation and deformation.',
                                   'translation': '(EXPERIMENTAL) Translations, calculated in single Lucas-Kanade iteration. '\
