@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 __author__ = 'Domen Gorjup, Janko Slavič, Miha Boltežar'
+__package__ = 'py_dic'
 
 """
 A basic GUI for the pyDIC application.
@@ -14,14 +15,25 @@ import pickle
 import datetime
 from PyQt5 import QtCore, QtGui
 import pyqtgraph as pg
-import tools
 import numpy as np
 import scipy.ndimage
 import configparser
 import warnings
+import logging
 
 from matplotlib import animation
 import matplotlib.pyplot as plt
+
+from . import dic_tools as tools
+
+# Logging:
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+ch = logging.StreamHandler()
+ch.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s %(levelname)s from %(name)s: %(message)s', datefmt='%H:%M:%S')
+ch.setFormatter(formatter)
+logger.addHandler(ch)
 
 # Disable warnings printout
 warnings.filterwarnings("ignore")
@@ -41,8 +53,7 @@ class GlavnoOkno(QtGui.QWidget):
         self.results_file_name = 'DIC_analysis'
         self.mode = 'rigid'     # The default analysis mode.
         self.all_modes = ['rigid', 'deformations', 'translation', 'integer']
-        #self.all_mode_names = ['Rigid', 'Deformable', 'Simple translation', 'Integer translation'] # simple translation mode needs debugging
-        self.all_mode_names = ['Rigid', 'Deformable']
+        self.all_mode_names = ['Rigid', 'Deformable', 'Simple translation', 'Integer translation']
         self.mode_descriptions = {'rigid': 'Rigid body displacement (translation, rotation).',
                                   'deformations': 'Translation and deformation.',
                                   'translation': '(EXPERIMENTAL) Translations, calculated in single Lucas-Kanade iteration. '\
@@ -342,7 +353,7 @@ class GlavnoOkno(QtGui.QWidget):
         if int(self.info_dict['Color Bit']) != 16:
             if self.info_dict['File Format'].lower() in ['tif', 'tiff']:    # 8-bit .tiff images are supported.
                 if self.debug:
-                    print('Warning, {:d} bit images!'.format(int(self.info_dict['Color Bit'])))
+                    logger.warning('Warning, {:d} bit images!'.format(int(self.info_dict['Color Bit'])))
             else:                                                           # 8-bit .mraw files are not upported!
                 self.pathlabel.setText('Invalid image type, pyDIC only works with 16-bit images!')
                 self.imw.setImage(np.zeros((100,100)))
@@ -435,6 +446,8 @@ class GlavnoOkno(QtGui.QWidget):
         self.min_roi_size = tuple(int((vel)) for vel in Config.get('GUI', 'min_roi_size').split(', '))
         self.initial_roi_size = tuple(int((vel)) for vel in Config.get('GUI', 'initial_roi_size').split(', '))
         self.debug = bool(Config.get('DIC', 'debug'))
+        if self.debug:
+            ch.setLevel(logging.DEBUG)
 
 
     def update_settings(self):
@@ -462,7 +475,7 @@ class GlavnoOkno(QtGui.QWidget):
                 self.imw.roi.setPos(cx_-w_//2, cy_-h_//2)
                 self.imw.CHroi.setPos(cx_, cy_)
             except Exception as e:
-                print(e)
+                logger.error(e)
 
 
     def update_save_path(self):
@@ -632,7 +645,7 @@ class GlavnoOkno(QtGui.QWidget):
 
         elif self.mode == 'translation':
             if self.debug:
-                print('Model: SIMPLE TRANSLATION')
+                logger.debug('Model: SIMPLE TRANSLATION')
             #try:
             result = tools.get_simple_translation(self.mraw_path,
                                                     self.roi_reference,
@@ -641,7 +654,7 @@ class GlavnoOkno(QtGui.QWidget):
                                                     progressBar=self.progressBar,
                                                     increment=self.sequence_increment)
             #except:
-                #print('An error occurred. Try using a different method.')
+                #logger.error('An error occurred. Try using a different method.')
             
             inc = result[-1]
             n_iters = [1]
@@ -654,8 +667,8 @@ class GlavnoOkno(QtGui.QWidget):
 
         elif self.mode == 'rigid':
             if self.debug: 
-                print('Model: RIGID')
-                print('Interpolating (cropped?) ROI ({:d} px border).'.format(self.crop_px))
+                logger.debug('Model: RIGID')
+                logger.debug('Interpolating (cropped?) ROI ({:d} px border).'.format(self.crop_px))
             try:
                 result = tools.get_rigid_movement(self.mraw_path,
                                                   self.roi_reference,
@@ -669,7 +682,7 @@ class GlavnoOkno(QtGui.QWidget):
                                                   crop=self.crop_px)
             except ValueError:
                 if self.debug:
-                    print('An error occurred attemptiong to use cropped ROI, continuing without cropping.')
+                    logger.warning('An error occurred attemptiong to use cropped ROI, continuing without cropping.')
                 result = tools.get_rigid_movement(self.mraw_path,
                                                   self.roi_reference,
                                                   self.roi_size,
@@ -692,8 +705,8 @@ class GlavnoOkno(QtGui.QWidget):
 
         elif self.mode == 'deformations':
             if self.debug: 
-                print('Model: DEFORMABLE')
-                print('Interpolating (cropped?) ROI ({:d} px border).'.format(self.crop_px))
+                logger.debug('Model: DEFORMABLE')
+                logger.debug('Interpolating (cropped?) ROI ({:d} px border).'.format(self.crop_px))
             try:
                 result = tools.get_affine_deformations(self.mraw_path,
                                                        self.roi_reference,
@@ -707,7 +720,7 @@ class GlavnoOkno(QtGui.QWidget):
                                                        crop=self.crop_px)
             except ValueError:
                 if self.debug:
-                    print('An error occurred attemptiong to use cropped ROI, continuing without cropping.')
+                    logger.warning('An error occurred attemptiong to use cropped ROI, continuing without cropping.')
                 result = tools.get_affine_deformations(self.mraw_path,
                                                        self.roi_reference,
                                                        self.roi_size,
@@ -735,19 +748,21 @@ class GlavnoOkno(QtGui.QWidget):
         self.ylabel.hide()
 
         # If maximum number of iterations was reached:
+        suggested_fix_message = 'If this occurred early in the analyis process, the selected '\
+                                'region of interest might be inappropriate.\n'\
+                                'Try moving the ROI or increasing its size.\n\n'\
+                                'Do yo wish to proceed to analysis results anyway?'
+
         if n_iters[-1] == 0:
             if self.debug:
-                print('\nMaximum iterations reached. Iteration numbers by image:\n{:}\n'.format(n_iters)) # Print optimization loop iteration numbers.
+                logger.warning('\nMaximum iterations reached. Iteration numbers by image:\n{:}\n'.format(n_iters)) # Print optimization loop iteration numbers.
 
             niter_warning = QtGui.QMessageBox.warning(self, 'Waring!',
                                     'Maximum iterations reached in the optimization process ' +
                                     '(image {:}).\n(Iterations: mean: {:0.3f}, std: {:0.3f})\n'.format(n_iters[-2] + 1,
                                                                                                     np.mean(n_iters[:-2]),
                                                                                                     np.std(n_iters[:-2])) +
-                                    'If this occurred early in the analyis process, the selected ' +
-                                    'region of interest might be inappropriate.\n' +
-                                    'Try moving the ROI or increasing its size.\n\n' +
-                                    'Do yo wish to prooceed to analysis resuts anyway?',
+                                    suggested_fix_message,
                                     QtGui.QMessageBox.Yes | QtGui.QMessageBox.No, QtGui.QMessageBox.No)
             if niter_warning == QtGui.QMessageBox.No:
                 self.to_beginning()
@@ -756,7 +771,7 @@ class GlavnoOkno(QtGui.QWidget):
         # If warnings errors were raised:
         if len(errors.keys()) != 0:
             if self.debug:
-                print('\nErrors ({:d}) occurred during analysis. See log for more info.'.format(len(errors.keys())))
+                logger.warning('\nErrors ({:d}) occurred during analysis. See log for more info.'.format(len(errors.keys())))
                 matrices = [{key: item['warp_matrix']} for key, item in errors.items()]
                 pickle.dump(matrices, open(self.save_path + '/warp_matrices.pkl', 'wb'))
             error_warning = QtGui.QMessageBox.warning(self, 'Waring!',
@@ -765,10 +780,7 @@ class GlavnoOkno(QtGui.QWidget):
                                     'Iterations: mean: {:0.3f}, std: {:0.3f})\n'.format(n_iters[-2] + 1,
                                                                                                     np.mean(n_iters[:-2]),
                                                                                                     np.std(n_iters[:-2])) +
-                                    'If this occurred early in the analyis process, the selected ' +
-                                    'region of interest might be inappropriate.\n' +
-                                    'Try moving the ROI or increasing its size.\n\n' +
-                                    'Do yo wish to prooceed to analysis resuts anyway?',
+                                    suggested_fix_message,
                                     QtGui.QMessageBox.Yes | QtGui.QMessageBox.No, QtGui.QMessageBox.No)
             if error_warning == QtGui.QMessageBox.No:
                 self.to_beginning()
@@ -781,7 +793,6 @@ class GlavnoOkno(QtGui.QWidget):
         # Save the results:
         tkin_data = np.hstack((self.t, self.kin))
         timestamp = datetime.datetime.now().strftime('%d-%m-%H-%M-%S')
-        print(self.timestampCheckbox.checkState())
         if self.timestampCheckbox.checkState():
             stamp = timestamp
         else:
@@ -810,13 +821,12 @@ class GlavnoOkno(QtGui.QWidget):
         if self.image_type in ['tif', 'tiff'] and tail == '_images.npy':
             delete_temp_reply = QtGui.QMessageBox.question(self, 'Delete temporary files',
                                                 'A temporary file has been created from .tif images ' + 
-                                                '({:s}). Do you wish to remove it? '.format(self.mraw_path) + 
-                                                '(Select "No", if you plan to analyse the same image sequence again.)',
+                                                '({:s}). \nDo you wish to remove it? '.format(self.mraw_path) + 
+                                                '\n\n(Select "No", if you plan to analyse the same image sequence again.)',
                                                 QtGui.QMessageBox.Yes | QtGui.QMessageBox.No, QtGui.QMessageBox.Yes)
             
-            if delete_temp_reply == QtGui.QMessageBox.Yes:
-                if self.debug:      
-                    print('Deleting temporary .npy file.')          
+            if delete_temp_reply == QtGui.QMessageBox.Yes:    
+                logger.info('Deleting temporary .npy file.')          
                 os.remove(self.mraw_path)
 
 

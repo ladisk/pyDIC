@@ -14,11 +14,27 @@ import scipy.signal
 from scipy.interpolate import RectBivariateSpline
 import collections
 import matplotlib.pyplot as plt
-import dic
 import warnings
+import logging
+from tqdm import tqdm
+
+from . import dic
 
 # Disable warnings printout
 warnings.filterwarnings("ignore")
+
+# Logging:
+#logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s', datefmt='%H:%M:%S')
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+ch = logging.StreamHandler()
+ch.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s %(levelname)s from %(name)s: %(message)s', datefmt='%H:%M:%S')
+ch.setFormatter(formatter)
+logger.addHandler(ch)
+
+# tqdm:
+tqdm_width = 100
 
 
 def allfiles(path, filetype='.tif'):
@@ -95,15 +111,18 @@ def _tiff_to_temporary_file(dir_path):
                     'Total Frame': '{:d}'.format(int(len(im_path))),
                     'Image Width': '{:d}'.format(image.shape[1]),
                     'Image Height': '{:d}'.format(image.shape[0]),
-                    'File Format' : 'tif',
+                    'File Format' : 'MRaw',
                     'EffectiveBit Depth': '12',
+                    'EffectiveBit Side': 'Lower',
                     'Comment Text': 'Reading from .tiff.<br>Modify measurement info in<br>created .cih file if necessary.',
                     'Color Bit': '16'}
 
         cih_file = os.path.join(dir_path, 'slika.cih')
         with open(cih_file, 'w') as file:
+            file.write('#Camera Information Header\n')
             for key in wanted_info:
                 file.write('{:s} : {:s}\n'.format(key, image_info[key]))
+            file.write('END')
     else:
         cih_file = glob.glob(dir_path + '/*.cih')[0]
     
@@ -195,11 +214,11 @@ def get_simple_translation(mraw_path, roi_reference, roi_size, file_shape, progr
     :return: iters: Array, number of iterations required to reach converegence for each image pair.
     :param: debug: If True, display debug output.
     '''
-    with open(mraw_path, 'rb') as mraw:
-        memmap = np.memmap(mraw, dtype=np.uint16, mode='r', shape=file_shape)             # Map to all images in file
+    memmap = np.memmap(mraw_path, dtype=np.uint16, mode='r', shape=file_shape)  # Map to all images in file
     
     memmap = memmap[::increment]                            # Apply sequence increment
     N_inc = len(memmap)
+    pbar = tqdm(total=N_inc, ncols=tqdm_width)                      # Text prograss bar
     errors = {}                                             # Initialize warnings dictionary
 
     # Precomputable stuff:
@@ -221,6 +240,7 @@ def get_simple_translation(mraw_path, roi_reference, roi_size, file_shape, progr
     p_ref = roi_reference                                   # Initialize a reference for all following calculations.
 
     # Loop through all the images in .mraw file:
+    pbar.update(1)
     for i in range(1, len(memmap)):                         # First image was loaded already.
         d_int = np.round(results[-1])                       # Last calculated integer translation.
         G = _get_roi_image(memmap[i], p_ref + d_int, roi_size) # Current image at integer location.
@@ -242,10 +262,10 @@ def get_simple_translation(mraw_path, roi_reference, roi_size, file_shape, progr
         results = np.vstack((results, d_int+d[::-1])) # y, x
         
         if progressBar:
-            progressBar.setValue(i / N_inc * 100)  # Update the progress bar.
-        else:
-            stdout_print_progress(i - 2, N_inc)  # Print progress info to stdout.
+            progressBar.setValue(i / N_inc * 100)           # Update the progress bar.
+        pbar.update(1)
 
+    pbar.close()
     memmap._mmap.close()                                    # Close the loaded memmap
     return results, increment
 
@@ -267,11 +287,11 @@ def get_rigid_movement(mraw_path, roi_reference, roi_size, file_shape, progressB
     :param: crop: Border size to crop loaded images (if 0, do not crop).
     :param: debug: If True, display debug output.
     '''
-    with open(mraw_path, 'rb') as mraw:
-        memmap = np.memmap(mraw, dtype=np.uint16, mode='r', shape=file_shape)             # Map to all images in file
+    memmap = np.memmap(mraw_path, dtype=np.uint16, mode='r', shape=file_shape)  # Map to all images in file
     
     memmap = memmap[::increment]                            # Apply sequence increment
     N_inc = len(memmap)
+    pbar = tqdm(total=N_inc, ncols=tqdm_width)                      # Text prograss bar
     errors = {}                                             # Initialize warnings dictionary
 
     # Precomputable stuff:
@@ -295,6 +315,7 @@ def get_rigid_movement(mraw_path, roi_reference, roi_size, file_shape, progressB
     p_ref = np.array([in_guess[0], in_guess[1], 0.])        # Initialize a reference for all following calculations.
 
     # Loop through all the images in .mraw file:
+    pbar.update(1)
     for i in range(1, len(memmap)):                         # First image was loaded already.
         if crop:
             roi_translation = (results[-1, :2]).astype(int)         # Last calculated integer displacement
@@ -353,9 +374,8 @@ def get_rigid_movement(mraw_path, roi_reference, roi_size, file_shape, progressB
         iters = np.append(iters, niter)                         # Append current iteration number to list.
 
         if progressBar:
-            progressBar.setValue(i / N_inc * 100)  # Update the progress bar.
-        else:
-            stdout_print_progress(i - 2, N_inc)  # Print progress info to stdout.
+            progressBar.setValue(i / N_inc * 100)               # Update the progress bar.
+        pbar.update(1)
 
         if debug:   # DEBUG
             if len(errors) != 0:
@@ -369,7 +389,8 @@ def get_rigid_movement(mraw_path, roi_reference, roi_size, file_shape, progressB
         iters = np.append(iters, np.argmax(iters))          # Append index of first iteration number maximum.
         iters = np.append(iters, 0)                         # Append 0 to the iters list (warning signal!)
     
-    print('Max niter: ', np.max(iters), ' (mean, std: ', np.mean(iters), np.std(iters),')')
+    pbar.close()
+    show_iterinfo(iters)
     memmap._mmap.close()                                    # Close the loaded memmap
     return results, errors, iters, increment
 
@@ -391,11 +412,11 @@ def get_affine_deformations(mraw_path, roi_reference, roi_size, file_shape, prog
     :return: results: Numpy array, containing extracted data, shaped as [p1, p2, p3, p4, p5, p6] arrays for all images.
     :return: iters: Array, number of iterations required to reach converegence for each image pair.
     '''
-    with open(mraw_path, 'rb') as mraw:
-        memmap = np.memmap(mraw, dtype=np.uint16, mode='r', shape=file_shape)             # Map to all images in file
+    memmap = np.memmap(mraw_path, dtype=np.uint16, mode='r', shape=file_shape)  # Map to all images in file
 
     memmap = memmap[::increment]                            # Apply sequence increment
     N_inc = len(memmap)
+    pbar = tqdm(total=N_inc, ncols=tqdm_width)                      # Text prograss bar
     errors = {}                                             # Initialize warnings dictionary
 
     # Precomputable stuff:
@@ -419,6 +440,7 @@ def get_affine_deformations(mraw_path, roi_reference, roi_size, file_shape, prog
     p_ref[2], p_ref[5] = in_guess[1], in_guess[0]           # ...
 
     # Loop through all the images in .mraw file:
+    pbar.update(1)
     for i in range(1, len(memmap)):                         # First image was loaded already.
         if crop:
             this_p = results[-1]
@@ -480,9 +502,8 @@ def get_affine_deformations(mraw_path, roi_reference, roi_size, file_shape, prog
         iters = np.append(iters, niter)                         # Append current iteration number to list.
 
         if progressBar:
-            progressBar.setValue(i / N_inc * 100)  # Update the progress bar.
-        else:
-            stdout_print_progress(i-2, N_inc)      # Print progress info to stdout.
+            progressBar.setValue(i / N_inc * 100)               # Update the progress bar.
+        pbar.update(1)
         
         if debug:   # DEBUG
             if len(errors) != 0:
@@ -496,7 +517,8 @@ def get_affine_deformations(mraw_path, roi_reference, roi_size, file_shape, prog
         iters = np.append(iters, np.argmax(iters))          # Append index of first iteration number maximum.
         iters = np.append(iters, 0)                         # Append 0 to the iters list (warning signal!)
 
-    print('Max niter: ', np.max(iters), ' (mean, std: ', np.mean(iters), np.std(iters), ')')
+    pbar.close()
+    show_iterinfo(iters)
     memmap._mmap.close()                                    # Close the loaded memmap
     return results, errors, iters, increment
 
@@ -585,14 +607,21 @@ def stdout_print_progress(current, all):
     :return:
     '''
     if current == 0:
-        sys.stdout.write('Current image: {:d} (of {:d})'.format(current, all))
+        sys.stdout.write('\tCurrent image: {:d} (of {:d})'.format(current, all))
     else:
         sys.stdout.write('\r\r')
         sys.stdout.flush()
-        sys.stdout.write('Current image: {:d} (of {:d})'.format(current, all))
-    if current+2 == all:
+        sys.stdout.write('\tCurrent image: {:d} (of {:d})'.format(current, all))
+    if current+1 == all:
+        #sys.stdout.write('\r\r')
+        #sys.stdout.flush()
         print()
 
+def show_iterinfo(iters):
+    '''
+    Prints a log message with information about analysis iterations.
+    '''
+    logger.info('Max niter: {0} (mean, std: {1}, {2:.3f})'.format(np.max(iters), np.mean(iters), np.std(iters)))
 
 def plot_data(data, unit):
     '''
@@ -624,7 +653,7 @@ def plot_data(data, unit):
         # Create a high-pass filter from the low-pass filter through spectral inversion.
         h = -h
         h[(N - 1) / 2] += 1
-        print(len(h))
+        #print(len(h))
 
     if latex:
         # LaTeX text backend
@@ -690,17 +719,17 @@ def plot_data(data, unit):
 
         f, ax = plt.subplots(3, 1)
 
-        ax[0].plot(t, u - np.mean(u), label=r'$u$', lw=lw)
-        ax[0].plot(t, v - np.mean(v), label=r'$v$', lw=lw)
+        ax[0].plot(t, u - u[0], label=r'$u$', lw=lw)
+        ax[0].plot(t, v - v[0], label=r'$v$', lw=lw)
         ax[0].set_ylabel(r'$x, y$ [{:s}]'.format(unit))
         ax[0].set_xlabel(r'$t$ [s]')
         ax[0].legend()
         ax[0].grid()
 
-        ax[1].plot(t, u_x-np.mean(u_x), label=r'$du/dx$', lw=lw)
-        ax[1].plot(t, u_y-np.mean(u_y), label=r'$du/dy$', lw=lw)
-        ax[1].plot(t, v_x-np.mean(v_x), label=r'$dv/dx$', lw=lw)
-        ax[1].plot(t, v_y-np.mean(v_y), label=r'$dv/dy$', lw=lw)
+        ax[1].plot(t, u_x-u_x[0], label=r'$du/dx$', lw=lw)
+        ax[1].plot(t, u_y-u_y[0], label=r'$du/dy$', lw=lw)
+        ax[1].plot(t, v_x-v_x[0], label=r'$dv/dx$', lw=lw)
+        ax[1].plot(t, v_y-v_y[0], label=r'$dv/dy$', lw=lw)
         ax[1].set_xlabel(r'$t$ [s]')
         ax[1].legend(loc=(0,1.01), ncol=4)
         ax[1].grid()
