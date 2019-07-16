@@ -1,21 +1,30 @@
 """A setuptools based setup module for the py_dic package."""
 
 from setuptools import setup, find_packages
-from codecs import open
 from os import path
 
-here = path.abspath(path.dirname(__file__))
 
-# Get the long description from the README file
-with open(path.join(here, 'README.md'), encoding='utf-8') as f:
-    long_description = f.read()
+def parse_requirements(filename):
+    ''' Load requirements from a pip requirements file '''
+    with open(filename, 'r') as fd:
+        lines = []
+        for line in fd:
+            line.strip()
+            if line and not line.startswith("#"):
+                lines.append(line)
+    return lines
+
+requirements = parse_requirements('requirements.txt')
+
+with open('README.md', 'r', encoding='UTF-8') as f:
+    readme = f.read()
 
 
 setup(
     name='py_dic',
     version='1.0.0',
     description='A DIgital Image Correlation implementation in Python using the SciPy stack.',
-    long_description=long_description,
+    long_description=readme,
     long_description_content_type='text/markdown',
     url='https://github.com/ladisk/pyDIC',
     author='Domen Gorjup',
@@ -29,10 +38,6 @@ setup(
     ],
 
     keywords='computer vision dic',
-    packages=[],#find_packages(exclude=['py_dic.main']),
-    py_modules = ['py_dic.dic', 'py_dic.dic_tools', 'py_dic.scheduled_run'],
-
-    install_requires=['matplotlib>=2.0.0',
-                      'numpy>=1.14.0',
-                      'tqdm>=4.10.0'],
+    packages=['py_dic'],
+    install_requires=requirements,
 )
