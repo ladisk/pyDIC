@@ -8,11 +8,27 @@ A Digital Image Correlation application, developed in Python.
 Clone or download the contetnts into a local directory. Install the package via `setupy.py` or run the `main.py` file and follow the on-screen instructions. 
 
 ```
-python main.py
+$ python -m py_dic.main
 ```
 
 To change the default analysis settings, edit the `settings.ini` file.
 
+You can use the `run.bat` file to start the GUI on Windows, but it expects the Python interpreter to be located in the `./venv/Scripts` folder inside the project's root directory. To achieve this, run the following commands (on a Windows machine):
+
+```
+$ cd pyIDC
+$ python -m pip virtualenv venv
+$ venv\Scripts\activate.bat
+
+```
+
+to create a ner virtual environment inside the `venv` folder and activate is. Now, install the project requirements into this activated virtual environment:
+
+```
+$ python -m pip install -r requirements.txt
+```
+
+Now, you can execute the `run.bat` file to start the pyDIC GUI.
 
 
 ### Authors
