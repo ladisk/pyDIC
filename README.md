@@ -5,6 +5,20 @@ A Digital Image Correlation application, developed in Python.
 
 ## Getting Started
 
+This package is hosted on pypi. To install it, simply run:
+
+```
+$ python -m pip install py_dic
+```
+
+You can now start the GUI by running:
+
+```
+$ python -m py_dic
+```
+
+### Running the source code 
+
 Clone or download the contetnts into a local directory. Install the package via `setupy.py` or run the `main.py` file and follow the on-screen instructions. 
 
 ```

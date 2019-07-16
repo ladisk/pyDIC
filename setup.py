@@ -22,7 +22,7 @@ with open('README.md', 'r', encoding='UTF-8') as f:
 
 setup(
     name='py_dic',
-    version='1.0.0',
+    version='0.1.1',
     description='A DIgital Image Correlation implementation in Python using the SciPy stack.',
     long_description=readme,
     long_description_content_type='text/markdown',
@@ -33,11 +33,12 @@ setup(
     classifiers=[
         'Development Status :: 3 - Alpha',
         'Intended Audience :: Developers',
-        'Topic :: Computer Vision',
+        'Topic :: Scientific/Engineering',
         'Programming Language :: Python :: 3.6',
     ],
 
     keywords='computer vision dic',
     packages=['py_dic'],
+    package_data={'py_dic':['*']},
     install_requires=requirements,
 )
